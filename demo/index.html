@@ -12,7 +12,8 @@
 <header>
   <div class="brand">
     <h1>Smart Plug Control</h1>
-    <a class="doc-link" href="https://vmexanik.github.io/smart-plug-control/" target="_blank" rel="noopener">Інструкція ↗</a>
+    <span id="eng-badge" class="eng-badge hidden" title="Інженерна збірка: консоль і діагностика">Інженерна прошивка</span>
+    <a class="doc-link" id="doc-link" href="https://vmexanik.github.io/SmartPlugControlDoc/" target="_blank" rel="noopener">Інструкція ↗</a>
   </div>
   <div id="status-bar" class="status-bar">
     <span id="wifi-status-line">завантаження статусу…</span> <br>
@@ -26,7 +27,8 @@
   <button class="tab-btn active" data-tab="plugs">Розетки</button>
   <button class="tab-btn" data-tab="settings">Системні налаштування</button>
   <button class="tab-btn" data-tab="log">Журнал подій</button>
-  <button class="tab-btn" data-tab="console">Консоль</button>
+  <button class="tab-btn eng-only hidden" data-tab="console">Консоль</button>
+  <button class="tab-btn eng-only hidden" data-tab="diag">Діагностика</button>
 </nav>
 
 <div id="portal-warn" class="portal-warn hidden">
@@ -193,6 +195,60 @@
       вони переживають програмне перезавантаження, збій чи watchdog, тож після несподіваного рестарту тут видно, що було перед ним.
       Знеструмлення очищає буфер.</p>
     <div class="console" id="con-out"></div>
+  </section>
+
+  <section id="tab-diag" class="tab-content">
+    <div class="toolbar">
+      <span class="hint" id="diag-updated">Оновлюється кожні 3 с, поки вкладка відкрита</span>
+      <button id="btn-diag-pause">Пауза</button>
+    </div>
+
+    <h2>Пам'ять</h2>
+    <div class="diag-cards" id="diag-mem"></div>
+
+    <h2>Задачі</h2>
+    <p class="hint">Вільний стек — мінімум за весь час роботи задачі (high-water mark). CPU — завантаження одного ядра з попереднього оновлення.</p>
+    <div class="table-responsive">
+      <table class="diag-table">
+        <thead><tr><th>Задача</th><th>Стан</th><th class="num">Пріор.</th><th class="num">Ядро</th><th class="num">Вільний стек, Б</th><th class="num">CPU, %</th></tr></thead>
+        <tbody id="diag-tasks"></tbody>
+      </table>
+    </div>
+
+    <h2>Wi-Fi</h2>
+    <div id="diag-wifi" class="status-block"></div>
+    <h3 class="diag-sub">Клієнти точки доступу</h3>
+    <div id="diag-ap-clients" class="hint"></div>
+    <h3 class="diag-sub">Історія відключень STA</h3>
+    <div class="table-responsive">
+      <table class="diag-table">
+        <thead><tr><th>Коли</th><th>Причина</th><th class="num">RSSI</th></tr></thead>
+        <tbody id="diag-disc"></tbody>
+      </table>
+    </div>
+
+    <h2>Рівні логування</h2>
+    <p class="hint">Змінюються одразу, без перезавантаження, і діють до наступного рестарту.
+      «*» — рівень за замовчуванням для всіх тегів (скидає окремі налаштування). Максимум у цій збірці: <b id="diag-log-max">-</b>.</p>
+    <div class="form-grid">
+      <label>Тег
+        <input type="text" id="diag-log-tag" list="diag-log-tags" placeholder="* або напр. wifi_manager">
+        <datalist id="diag-log-tags"></datalist>
+      </label>
+      <label>Рівень
+        <select id="diag-log-level">
+          <option value="none">none</option>
+          <option value="error">error</option>
+          <option value="warn">warn</option>
+          <option value="info" selected>info</option>
+          <option value="debug">debug</option>
+          <option value="verbose">verbose</option>
+        </select>
+      </label>
+    </div>
+    <button id="btn-diag-log-set" class="primary">Застосувати</button>
+    <span id="diag-log-result" class="save-result"></span>
+    <div id="diag-log-current" class="status-block"></div>
   </section>
 </main>
 

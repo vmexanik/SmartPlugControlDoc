@@ -12,15 +12,19 @@
   var K_FACTORY = 0.7667;      /* заводський коефіцієнт (Kconfig) */
   var K_IDEAL = 0.735;         /* "ідеальний" коефіцієнт цього вигаданого модуля: з заводським покази ~4% завищені */
   var T_START = Date.now();
+  /* ?eng=1 -- інженерна збірка: вкладки «Консоль» і «Діагностика». Без нього
+   * демо поводиться як звичайна збірка (ці API віддають 404, як на пристрої). */
+  var ENG = /[?&]eng(=1)?(&|$)/.test(location.search);
+  var VERSION = ENG ? '2.1.7-eng' : '2.1.7';
 
-  var state, sim, scan, wifiScan, nextId, timer;
+  var state, sim, scan, wifiScan, nextId, timer, con, dbg;
 
   /* ---------------------------------------------------------------- state */
   function plugBase(over) {
     var p = {
       id: 0, name: '', enabled: true, input: 'NONE', invert: false, on_delay_s: 0,
       driver: 'http',
-      http: { on_url: '', off_url: '', status_url: '', use_post: false, auth_user: '', auth_pass: '', family: 'unknown', kind: 'unknown' },
+      http: { on_url: '', off_url: '', status_url: '', use_post: false, auth_user: '', auth_pass: '', family: 'unknown', kind: 'unknown', esph_power: '', esph_voltage: '', esph_current: '' },
       mqtt: { cmd_topic: '', payload_on: 'on', payload_off: 'off', state_topic: '', qos: 0, retain: false },
       zigbee: { note: '' },
       last_state: false, last_cmd_ok: true, reachable: true,
@@ -37,6 +41,7 @@
 
   function shellyG1(ip) { return { on_url: 'http://' + ip + '/relay/0?turn=on', off_url: 'http://' + ip + '/relay/0?turn=off', family: 'shelly_gen1', kind: 'plug' }; }
   function shellyG2(ip) { return { on_url: 'http://' + ip + '/rpc/Switch.Set?id=0&on=true', off_url: 'http://' + ip + '/rpc/Switch.Set?id=0&on=false', family: 'shelly_gen2', kind: 'plug' }; }
+  function esphome(ip) { return { on_url: 'http://' + ip + '/switch/relay/turn_on', off_url: 'http://' + ip + '/switch/relay/turn_off', status_url: 'http://' + ip + '/switch/relay', use_post: true, family: 'esphome', kind: 'plug', esph_power: 'sensor/power', esph_voltage: 'sensor/voltage', esph_current: 'sensor/current' }; }
   function tasmota(ip) { return { on_url: 'http://' + ip + '/cm?cmnd=Power1%20On', off_url: 'http://' + ip + '/cm?cmnd=Power1%20Off', family: 'tasmota', kind: 'plug' }; }
 
   function initialState() {
@@ -46,7 +51,8 @@
         plugBase({ id: 1, name: 'Бойлер', input: 'AC1', on_delay_s: 10, http: shellyG1('192.168.1.41'), last_state: true, _w: 1480 }),
         plugBase({ id: 2, name: 'Насос', input: 'DC1', http: shellyG2('192.168.1.42'), last_state: false, _w: 320 }),
         plugBase({ id: 3, name: 'Підсвітка', input: 'NONE', http: tasmota('192.168.1.43'), last_state: true, _w: 8.4 }),
-        plugBase({ id: 4, name: 'Гараж: обігрівач', input: 'DC2', reachable: false, http: shellyG1('192.168.1.44'), last_state: false, _w: 900 })
+        plugBase({ id: 4, name: 'Гараж: обігрівач', input: 'DC2', reachable: false, http: shellyG1('192.168.1.44'), last_state: false, _w: 900 }),
+        plugBase({ id: 5, name: 'Кавоварка', input: 'NONE', http: esphome('192.168.1.45'), last_state: false, _w: 1150 })
       ],
       inputs: [
         { label: 'AC1', enabled: true },
@@ -81,7 +87,95 @@
   function addLog(src, plug, action, ok, detail) {
     state.log.push({ t: nowSec(), src: src, plug: plug || '', action: action, ok: ok, detail: detail || '' });
     if (state.log.length > 50) state.log.shift();
+    conLog(ok ? 'I' : 'W', 'event_log', src + (plug ? ' [' + plug + ']' : '') + ' ' + action + (detail ? ': ' + detail : ''));
   }
+
+  /* ---------------------------------------------------------------- engineering build */
+  function uptimeMs() { return (3 * 86400 + 4 * 3600) * 1000 + (Date.now() - T_START); }
+
+  function conLog(level, tag, text) {
+    if (!con) return;
+    con.lines.push([con.next++, level, level + ' (' + uptimeMs() + ') ' + tag + ': ' + text]);
+    if (con.lines.length > 256) con.lines.shift();
+  }
+
+  function initialCon() {
+    con = { next: 1, lines: [] };
+    var boot = [
+      ['W', 'console', '==== boot #0, reset reason: power-on ===='],
+      ['I', 'app_main', 'Smart Plug Control ' + VERSION + ', HW 1.1'],
+      ['I', 'storage', 'LittleFS mounted, 5 plugs'],
+      ['I', 'wifi_manager', 'mDNS: http://SmartPlug-A1B2C3.local/'],
+      ['I', 'wifi_manager', 'AP SSID: SmartPlug-A1B2C3'],
+      ['I', 'wifi_manager', 'Connecting to STA SSID: Home-2.4G'],
+      ['I', 'wifi', 'connected with Home-2.4G, aid = 3, channel 6, BW20, bssid = 9c:53:22:4e:10:a8'],
+      ['I', 'esp_netif_handlers', 'sta ip: 192.168.1.50, mask: 255.255.255.0, gw: 192.168.1.1'],
+      ['I', 'time_sync', 'NTP synced'],
+      ['I', 'web_server', 'HTTP server started, 44 handlers'],
+      ['W', 'driver_http', 'status query http://192.168.1.44/relay/0 failed: ESP_ERR_HTTP_CONNECT'],
+      ['I', 'plug_manager', 'plug 4 (Гараж: обігрівач) offline, backing off']
+    ];
+    boot.forEach(function (l) { conLog(l[0], l[1], l[2]); });
+  }
+
+  var LEVELS = ['none', 'error', 'warn', 'info', 'debug', 'verbose'];
+  var TAGS = ['app_main', 'wifi_manager', 'web_server', 'plug_manager', 'driver_http', 'driver_mqtt', 'esphome',
+    'fingerprint', 'net_scan', 'ac_monitor', 'ZMPT101B', 'storage', 'event_log', 'time_sync', 'system_health',
+    'captive_dns', 'gpio_inputs', 'led_status', 'debug', 'wifi', 'esp_netif_handlers', 'mdns'];
+
+  function initialDbg() {
+    return {
+      level: 'info', overrides: [],
+      disc: [
+        { up: 3 * 86400 + 4 * 3600 - 40000, ago: 40000, reason: 200, rssi: -84 },
+        { up: 3 * 86400 + 4 * 3600 - 172000, ago: 172000, reason: 8, rssi: 0 }
+      ]
+    };
+  }
+
+  function levelsJson() {
+    return { default: dbg.level, max: 'debug', overrides: clone(dbg.overrides), tags: TAGS.slice() };
+  }
+
+  function debugJson() {
+    var up = Math.floor(uptimeMs() / 1000);
+    function t(name, state, prio, core, stack, cpu) {
+      return { name: name, state: state, prio: prio, core: core, stack_free: stack, cpu: Math.max(0, cpu + jitter(cpu * 0.3)) };
+    }
+    var cpuIdle = 93 + jitter(1.5);
+    return {
+      uptime_s: up,
+      mem: {
+        internal: { total: 360283, free: 121000 + Math.round(jitter(1500)), largest: 31744, min_free: 98712 },
+        psram: { total: 8238104, free: 8121000 + Math.round(jitter(4000)), largest: 7995392, min_free: 8085120 }
+      },
+      tasks: [
+        t('IDLE0', 'ready', 0, 0, 820, cpuIdle), t('IDLE1', 'ready', 0, 1, 820, cpuIdle - 1.5),
+        t('httpd', 'running', 5, -1, 10480, 1.2), t('tcpip', 'blocked', 18, -1, 1668, 0.6),
+        t('wifi', 'blocked', 23, 0, 3420, 0.9), t('ac_monitor', 'blocked', 4, 0, 3256, 0.1),
+        t('zmpt101b_task', 'blocked', 5, 1, 2908, 5.4), t('plug_worker', 'blocked', 5, -1, 9396, 0.05),
+        t('plug_metrics', 'blocked', 3, -1, 9188, 0.4), t('plug_on_delay', 'blocked', 4, -1, 1804, 0.02),
+        t('gpio_input_poll', 'blocked', 5, -1, 2048, 0.07), t('sys_health', 'blocked', 2, -1, 2656, 0.01),
+        t('wifi_roam', 'blocked', 3, -1, 2672, 0.01), t('led_status', 'blocked', 1, -1, 900, 0.01),
+        t('captive_dns', 'blocked', 5, -1, 1732, 0.02), t('mdns', 'blocked', 1, 0, 2400, 0.03),
+        t('esp_timer', 'suspended', 22, 0, 3040, 0.2)
+      ],
+      wifi: {
+        hostname: 'SmartPlug-A1B2C3',
+        sta: state.wifi.connected ? { ssid: state.wifi.ssid, bssid: '9c:53:22:4e:10:a8', channel: 6, rssi: -58 + Math.round(jitter(2)), bw_mhz: 20, phy: 'bgn', ip: state.wifi.sta_ip, gw: '192.168.1.1' } : null,
+        ap_clients: [],
+        disconnects_total: dbg.disc.length,
+        disconnects: dbg.disc.map(function (d) {
+          return { uptime_s: d.up, epoch: nowSec() - d.ago - Math.floor((Date.now() - T_START) / 1000), reason: d.reason, rssi: d.rssi };
+        })
+      }
+    };
+  }
+
+  var ESPH_DEVICES = {
+    '192.168.1.45': { title: 'athom-coffee', switches: [{ path: 'switch/relay', name: 'Relay', on: false }] },
+    '192.168.1.65': { title: 'esphome-kitchen', switches: [{ path: 'switch/relay', name: 'Relay', on: true }, { path: 'switch/led', name: 'Status LED', on: false }] }
+  };
 
   function displayedV() {
     if (sim.trueV < 20) return 0;
@@ -108,7 +202,7 @@
 
   function refreshMetrics(p) {
     var family = p.http && p.http.family;
-    var meterable = p.driver === 'http' && (family === 'shelly_gen1' || family === 'shelly_gen2' || family === 'tasmota');
+    var meterable = p.driver === 'http' && (family === 'shelly_gen1' || family === 'shelly_gen2' || family === 'tasmota' || family === 'esphome');
     if (!meterable || !p.reachable) { if (!p.reachable) return; p.metrics = { valid: false, power_w: 0, voltage_v: 0, current_a: 0, updated_us: 0 }; return; }
     var w = p.last_state ? Math.max(0, p._w + jitter(p._w * 0.01)) : 0;
     var v = family === 'shelly_gen1' ? 0 : 231 + jitter(0.6);
@@ -148,6 +242,8 @@
 
   function tick() {
     applyInputs();
+    if (Math.random() < 0.12) conLog('I', 'plug_manager', 'metrics poll: ' + state.plugs.filter(function (p) { return p.reachable; }).length + ' plugs ok');
+    if (Math.random() < 0.04) conLog('W', 'driver_http', 'status query http://192.168.1.44/relay/0 failed: ESP_ERR_HTTP_CONNECT');
     state.plugs.forEach(refreshMetrics);
     renderPanelStatus();
   }
@@ -218,6 +314,7 @@
       var inb = inBand();
       return {
         uptime_s: 3 * 86400 + 4 * 3600 + Math.floor((Date.now() - T_START) / 1000),
+        version: VERSION, eng: ENG,
         wifi: { sta_connected: state.wifi.connected, ssid: state.wifi.ssid, sta_ip: state.wifi.sta_ip, rssi: -58, config_error: state.wifi.config_error, ap_ip: state.wifi.ap_ip },
         inputs: state.inputs.map(function (i) { return { label: i.label, enabled: i.enabled, level: inputLevel(i.label) }; }),
         ac_mon: {
@@ -324,7 +421,40 @@
     if (path === '/api/log/clear' && method === 'POST') { state.log = []; return { ok: true }; }
 
     if (path === '/api/system/ota' && method === 'GET') {
-      return { project: 'smart_plug_control', version: '2.1.2 (демо)', hw_version: '1.1', built: 'Oct 10 2026', max_size: 4194304 };
+      return { project: 'smart_plug_control', version: VERSION, hw_version: '1.1', built: 'Nov 19 2026', max_size: 1572864 };
+    }
+
+    if (path === '/api/esphome/discover' && method === 'POST') {
+      var dev = ESPH_DEVICES[String(body.host || '').trim()];
+      if (!dev) throw httpError(404, 'не ESPHome або вимкнено web_server: (демо знає 192.168.1.45 і 192.168.1.65)');
+      return { title: dev.title, switches: clone(dev.switches), default_switch: 0,
+               power: 'sensor/power', voltage: 'sensor/voltage', current: 'sensor/current' };
+    }
+
+    /* Лише інженерна збірка: у звичайній цих маршрутів на пристрої немає. */
+    if (ENG && path === '/api/console' && method === 'GET') {
+      var first = con.lines.length ? con.lines[0][0] : con.next;
+      var since = +u.searchParams.get('since') || 0;
+      if (since < first || since > con.next) since = first;
+      var out = con.lines.filter(function (l) { return l[0] >= since; }).slice(0, 64);
+      var nxt = out.length ? out[out.length - 1][0] + 1 : since;
+      return { first: first, boot: 0, lines: out, next: nxt, more: nxt < con.next };
+    }
+    if (ENG && path === '/api/console/clear' && method === 'POST') { con.lines = []; return { ok: true }; }
+    if (ENG && path === '/api/debug' && method === 'GET') return debugJson();
+    if (ENG && path === '/api/debug/log' && method === 'GET') return levelsJson();
+    if (ENG && path === '/api/debug/log' && method === 'POST') {
+      var lv = LEVELS.indexOf(body.level), tg = String(body.tag || '');
+      if (!tg || lv < 0) throw httpError(400, 'потрібні tag і level (none/error/warn/info/debug)');
+      var lname = LEVELS[Math.min(lv, 4)];
+      if (tg === '*') { dbg.level = lname; dbg.overrides = []; }
+      else {
+        var ov = dbg.overrides.find(function (o) { return o.tag === tg; });
+        if (ov) ov.level = lname;
+        else { if (dbg.overrides.length >= 16) throw httpError(409, 'забагато тегів, скиньте рівень для всіх (*)'); dbg.overrides.push({ tag: tg, level: lname }); }
+      }
+      conLog('I', 'debug', 'log level ' + tg + ' = ' + lname);
+      return levelsJson();
     }
     if (path === '/api/system/restart' && method === 'POST') return { ok: true };
     if (path === '/api/system/factory_reset' && method === 'POST') {
@@ -403,7 +533,8 @@
     var b = document.createElement('div');
     b.className = 'demo-banner';
     b.innerHTML = '<span><strong>Демо.</strong> Це справжній веб-інтерфейс пристрою з вигаданими даними. Нічого не надсилається, а після перезавантаження сторінки все скидається.</span>' +
-      '<a href="../index.html">← До інструкції</a>';
+      '<span>' + (ENG ? '<a href="?">Звичайна збірка</a>' : '<a href="?eng=1">Інженерна збірка (консоль, діагностика)</a>') +
+      ' · <a href="../index.html">← До інструкції</a></span>';
     document.body.insertBefore(b, document.body.firstChild);
 
     var d = document.createElement('details');
@@ -445,10 +576,12 @@
   }
 
   /* ---------------------------------------------------------------- init */
+  initialCon();
   state = initialState(); sim = initialSim();
+  dbg = initialDbg();
   scan = { running: false, startedAt: 0 };
   wifiScan = { startedAt: 0 };
-  nextId = 5;
+  nextId = 6;
 
   window.fetch = fakeFetch;
   window.XMLHttpRequest = FakeXHR;

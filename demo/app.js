@@ -48,6 +48,7 @@
       if (btn.dataset.tab === 'settings') { loadSettings(); loadWifiStatus(); loadTime(); loadFwInfo(); }
       if (btn.dataset.tab === 'log') loadLog();
       if (btn.dataset.tab === 'console') consoleStart(); else consoleStop();
+      if (btn.dataset.tab === 'diag') diagStart(); else diagStop();
     });
   });
 
@@ -118,6 +119,7 @@
       $('#wifi-status-line').innerHTML = wifiTxt;
       $('#ap-ip-val').textContent = s.wifi.ap_ip;
       $('#inputs-status-line').textContent = inputsTxt;
+      applyBuildFlags(s);
       /* Seed the uptime clock from the device's real uptime_s exactly
        * once (see the file-level comment above renderUptime()) and render
        * it right there -- every loadStatus() after the first leaves
@@ -1151,11 +1153,13 @@
    * the usual wrong picks (bootloader/partition table are .bin too but
    * get rejected by the device anyway; a .zip/.elf/.txt is caught here). */
   let fwFileOk = false;
+  let fwFileVer = '';    /* version string from the picked image's header */
   async function onFwFileChange() {
     const file = $('#fw-file').files[0];
     const name = $('#fw-file-name');
     $('#fw-result').textContent = '';
     fwFileOk = false;
+    fwFileVer = '';
     if (!file) {
       name.textContent = 'Файл не вибрано';
       name.className = 'file-name empty';
@@ -1169,8 +1173,17 @@
         err = `завеликий (максимум ${(fwMaxSize / 1024).toFixed(0)} КБ)`;
       } else {
         try {
-          const head = new Uint8Array(await file.slice(0, 1).arrayBuffer());
-          if (head[0] !== 0xE9) err = 'це не файл прошивки ESP32';
+          const head = new Uint8Array(await file.slice(0, 80).arrayBuffer());
+          if (head[0] !== 0xE9) {
+            err = 'це не файл прошивки ESP32';
+          } else if (head.length >= 80) {
+            /* esp_app_desc_t follows the 24-byte image header + 8-byte
+             * segment header; its version[32] field is at offset 16. */
+            const v = head.slice(48, 80);
+            const end = v.indexOf(0);
+            fwFileVer = new TextDecoder().decode(end < 0 ? v : v.slice(0, end)).trim();
+            if (!/^[0-9A-Za-z._+-]{1,31}$/.test(fwFileVer)) fwFileVer = '';
+          }
         } catch (e) { /* can't read it here -- let the device check it */ }
       }
       if (err) {
@@ -1178,6 +1191,11 @@
         name.className = 'file-name error';
       } else {
         fwFileOk = true;
+        if (fwFileVer) {
+          const eng = /-eng$/.test(fwFileVer);
+          name.textContent += ` · v${fwFileVer}` + (eng ? ' (інженерна)' : '');
+          if (eng !== !!engBuild) name.className = 'file-name warn';
+        }
       }
     }
     $('#btn-fw-upload').disabled = !fwFileOk;
@@ -1194,7 +1212,14 @@
       res.textContent = `Файл завеликий: ${(file.size / 1024).toFixed(0)} КБ, максимум ${(fwMaxSize / 1024).toFixed(0)} КБ`;
       return;
     }
-    if (!confirm(`Прошити пристрій файлом ${file.name} (${(file.size / 1024).toFixed(0)} КБ)? Пристрій перезавантажиться.`)) return;
+    let warn = '';
+    if (/-eng$/.test(fwFileVer) && !engBuild) {
+      warn = 'УВАГА: це ІНЖЕНЕРНА прошивка (для діагностики). Вона має консоль і вкладку «Діагностика», ' +
+        'пише більше логів і використовує більше пам\'яті. Для щоденної роботи ставте звичайну.\n\n';
+    } else if (fwFileVer && !/-eng$/.test(fwFileVer) && engBuild) {
+      warn = 'Це звичайна прошивка: після оновлення консоль і вкладка «Діагностика» зникнуть.\n\n';
+    }
+    if (!confirm(`${warn}Прошити пристрій файлом ${file.name}${fwFileVer ? ' (v' + fwFileVer + ')' : ''}, ${(file.size / 1024).toFixed(0)} КБ? Пристрій перезавантажиться.`)) return;
 
     const btn = $('#btn-fw-upload');
     btn.disabled = true;
@@ -1585,8 +1610,194 @@
     }
   });
 
+  /* ---------------- engineering build ---------------- */
+  /* /api/status says eng:true only in the engineering build. The release
+   * build has no console or /api/debug at all, so its tabs stay hidden. */
+  let engBuild = null;   /* null until the first /api/status */
+  function applyBuildFlags(s) {
+    const eng = !!s.eng;
+    if (eng === engBuild) return;
+    engBuild = eng;
+    $$('.eng-only').forEach((el) => el.classList.toggle('hidden', !eng));
+    $('#eng-badge').classList.toggle('hidden', !eng);
+  }
+
+  /* ---------------- diagnostics (engineering build) ---------------- */
+  const DIAG_POLL_MS = 3000;
+  let diagActive = false;
+  let diagPaused = false;
+  let diagTimer = null;
+  let diagLogLoaded = false;
+
+  /* wifi_err_reason_t (esp_wifi_types.h) */
+  const WIFI_REASONS = {
+    1: 'UNSPECIFIED', 2: 'AUTH_EXPIRE', 3: 'AUTH_LEAVE', 4: 'DISASSOC_DUE_TO_INACTIVITY',
+    5: 'ASSOC_TOOMANY', 6: 'CLASS2_FRAME_FROM_NONAUTH_STA', 7: 'CLASS3_FRAME_FROM_NONASSOC_STA',
+    8: 'ASSOC_LEAVE', 9: 'ASSOC_NOT_AUTHED', 10: 'DISASSOC_PWRCAP_BAD', 11: 'DISASSOC_SUPCHAN_BAD',
+    13: 'IE_INVALID', 14: 'MIC_FAILURE', 15: '4WAY_HANDSHAKE_TIMEOUT', 16: 'GROUP_KEY_UPDATE_TIMEOUT',
+    17: 'IE_IN_4WAY_DIFFERS', 18: 'GROUP_CIPHER_INVALID', 19: 'PAIRWISE_CIPHER_INVALID',
+    20: 'AKMP_INVALID', 23: '802_1X_AUTH_FAILED', 24: 'CIPHER_SUITE_REJECTED', 34: 'MISSING_ACKS',
+    200: 'BEACON_TIMEOUT', 201: 'NO_AP_FOUND', 202: 'AUTH_FAIL', 203: 'ASSOC_FAIL',
+    204: 'HANDSHAKE_TIMEOUT', 205: 'CONNECTION_FAIL', 206: 'AP_TSF_RESET', 207: 'ROAMING',
+    208: 'ASSOC_COMEBACK_TIME_TOO_LONG', 209: 'SA_QUERY_TIMEOUT',
+    210: 'NO_AP_FOUND_W_COMPATIBLE_SECURITY', 211: 'NO_AP_FOUND_IN_AUTHMODE_THRESHOLD',
+    212: 'NO_AP_FOUND_IN_RSSI_THRESHOLD',
+  };
+  const WIFI_REASON_HINTS = {
+    2: 'точка доступу забула клієнта', 4: 'неактивність', 8: 'клієнт відключився сам',
+    15: 'ймовірно, неправильний пароль', 200: 'зник сигнал точки доступу',
+    201: 'мережу не знайдено', 202: 'помилка автентифікації', 204: 'ймовірно, неправильний пароль',
+    205: 'не вдалося підключитись', 207: 'перехід на іншу точку доступу',
+  };
+
+  function fmtDur(sec) {
+    sec = Math.floor(sec || 0);
+    const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+    if (d) return `${d} д ${h} год`;
+    if (h) return `${h} год ${m} хв`;
+    if (m) return `${m} хв`;
+    return `${sec} с`;
+  }
+
+  function kb(b) { return (b / 1024).toFixed(b < 10240 ? 1 : 0) + ' КБ'; }
+
+  function memCard(title, m) {
+    if (!m || !m.total) return `<div class="diag-card"><h3>${title}</h3><span class="hint">немає</span></div>`;
+    const used = 100 - (m.free * 100 / m.total);
+    const minPct = m.min_free * 100 / m.total;
+    const cls = minPct < 5 ? 'bad' : minPct < 15 ? 'warn' : '';
+    return `<div class="diag-card"><h3>${title}</h3>
+      <div class="diag-bar ${cls}"><div style="width:${used.toFixed(1)}%"></div></div>
+      <div class="row"><span>Вільно</span><span>${kb(m.free)} з ${kb(m.total)}</span></div>
+      <div class="row"><span>Найбільший блок</span><span>${kb(m.largest)}</span></div>
+      <div class="row"><span>Мінімум з запуску</span><span>${kb(m.min_free)}</span></div></div>`;
+  }
+
+  function fmtWhen(d, nowUptime) {
+    const ago = Math.max(0, nowUptime - d.uptime_s);
+    const agoTxt = `${fmtDur(ago)} тому`;
+    if (d.epoch && d.epoch > 1600000000) {
+      return `${new Date(d.epoch * 1000).toLocaleString('uk-UA')} <span class="hint">(${agoTxt})</span>`;
+    }
+    return `uptime ${fmtDur(d.uptime_s)} <span class="hint">(${agoTxt})</span>`;
+  }
+
+  function renderDiag(d) {
+    $('#diag-mem').innerHTML = memCard('Внутрішня RAM', d.mem && d.mem.internal) +
+      memCard('PSRAM', d.mem && d.mem.psram);
+
+    const tasks = (d.tasks || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+    $('#diag-tasks').innerHTML = tasks.map((t) => `<tr>
+      <td>${escapeHtml(t.name)}</td><td>${escapeHtml(t.state)}</td>
+      <td class="num">${t.prio}</td><td class="num">${t.core < 0 ? '—' : t.core}</td>
+      <td class="num${t.stack_free < 512 ? ' low' : ''}">${t.stack_free}</td>
+      <td class="num">${(t.cpu || 0).toFixed(1)}</td></tr>`).join('') ||
+      '<tr><td colspan="6" class="hint">немає даних</td></tr>';
+
+    const w = d.wifi || {};
+    const sta = w.sta;
+    let html = `Hostname: <b>${escapeHtml(w.hostname || '-')}</b><br>`;
+    if (sta) {
+      html += `STA: <b>${escapeHtml(sta.ssid)}</b> · BSSID ${escapeHtml(sta.bssid)} · канал ${sta.channel}` +
+        ` (${sta.bw_mhz} МГц, ${escapeHtml(sta.phy || '?')}) · RSSI ${sta.rssi} dBm ${signalIcon(sta.rssi)}<br>` +
+        `IP ${escapeHtml(sta.ip || '-')} · шлюз ${escapeHtml(sta.gw || '-')}`;
+    } else {
+      html += '<span class="bad">STA не підключено</span>';
+    }
+    $('#diag-wifi').innerHTML = html;
+
+    const cl = w.ap_clients || [];
+    $('#diag-ap-clients').innerHTML = cl.length
+      ? cl.map((c) => `${escapeHtml(c.mac)} · ${c.rssi} dBm`).join('<br>')
+      : 'немає підключених клієнтів';
+
+    const disc = w.disconnects || [];
+    const extra = (w.disconnects_total || 0) > disc.length
+      ? `<tr><td colspan="3" class="hint">усього з запуску: ${w.disconnects_total}, показано останні ${disc.length}</td></tr>` : '';
+    const rows = disc.map((x) => {
+      const name = WIFI_REASONS[x.reason] || '?';
+      const hint = WIFI_REASON_HINTS[x.reason] ? ` <span class="hint">— ${WIFI_REASON_HINTS[x.reason]}</span>` : '';
+      return `<tr><td>${fmtWhen(x, d.uptime_s)}</td><td>${x.reason} ${name}${hint}</td>
+        <td class="num">${x.rssi ? x.rssi + ' dBm' : '—'}</td></tr>`;
+    }).join('');
+    $('#diag-disc').innerHTML = rows ? rows + extra : '<tr><td colspan="3" class="hint">відключень не було</td></tr>';
+
+    $('#diag-updated').textContent = `Оновлено ${new Date().toLocaleTimeString('uk-UA')} · uptime ${fmtDur(d.uptime_s)}`;
+  }
+
+  function renderLogLevels(l) {
+    if (!l) return;
+    $('#diag-log-max').textContent = l.max;
+    if (!diagLogLoaded) {
+      $('#diag-log-tags').innerHTML = ['*'].concat(l.tags || [])
+        .map((t) => `<option value="${escapeHtml(t)}">`).join('');
+      diagLogLoaded = true;
+    }
+    const ov = l.overrides || [];
+    $('#diag-log-current').innerHTML = `За замовчуванням (*): <b>${escapeHtml(l.default)}</b>` +
+      (ov.length ? '<br>' + ov.map((o) => `${escapeHtml(o.tag)}: <b>${escapeHtml(o.level)}</b>`).join(' · ')
+        : '<br><span class="hint">окремих налаштувань тегів немає</span>');
+  }
+
+  async function diagPoll() {
+    diagTimer = null;
+    if (!diagActive) return;
+    if (!diagPaused && !document.hidden && !fwUploading) {
+      try {
+        renderDiag(await api('/api/debug'));
+      } catch (e) {
+        $('#diag-updated').textContent = 'Немає відповіді: ' + e.message;
+      }
+    }
+    if (diagActive && !diagTimer) diagTimer = setTimeout(diagPoll, DIAG_POLL_MS);
+  }
+
+  function diagStart() {
+    if (diagActive) return;
+    diagActive = true;
+    api('/api/debug/log').then(renderLogLevels).catch(() => {});
+    diagPoll();
+  }
+
+  function diagStop() {
+    diagActive = false;
+    if (diagTimer) { clearTimeout(diagTimer); diagTimer = null; }
+  }
+
+  $('#btn-diag-pause').addEventListener('click', (ev) => {
+    diagPaused = !diagPaused;
+    ev.currentTarget.textContent = diagPaused ? 'Продовжити' : 'Пауза';
+    ev.currentTarget.classList.toggle('primary', diagPaused);
+    if (!diagPaused && diagActive) {
+      if (diagTimer) { clearTimeout(diagTimer); diagTimer = null; }
+      diagPoll();
+    }
+  });
+
+  $('#btn-diag-log-set').addEventListener('click', async () => {
+    const res = $('#diag-log-result');
+    const tag = $('#diag-log-tag').value.trim() || '*';
+    const level = $('#diag-log-level').value;
+    res.className = 'save-result';
+    res.textContent = '';
+    try {
+      const r = await api('/api/debug/log', { method: 'POST', body: JSON.stringify({ tag, level }) });
+      renderLogLevels(r && r.default ? r : await api('/api/debug/log'));
+      res.textContent = `${tag} → ${level}`;
+      res.className = 'save-result';
+    } catch (e) {
+      res.textContent = 'Помилка: ' + e.message;
+      res.className = 'save-result error';
+    }
+  });
+
   /* ---------------- init ---------------- */
   loadPlugs();
+  /* "Інструкція" opens the docs for this firmware's line: the site turns
+   * ?fw=<version> into the matching 2.x/3.x documentation. */
+  api('/api/system/ota').then((i) => {
+    if (i && i.version) $('#doc-link').href = `https://vmexanik.github.io/SmartPlugControlDoc/?fw=${encodeURIComponent(i.version)}`;
+  }).catch(() => {});
   loadStatus();
   setInterval(() => { if (!fwUploading) loadStatus(); }, 5000);
   /* Power metrics update in the background every ~15s (metrics_poll_task in

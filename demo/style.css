@@ -546,6 +546,7 @@ input[type=checkbox] { accent-color: var(--bs-blue); }
 }
 .file-name.empty { color: var(--bs-gray); font-style: italic; }
 .file-name.error { color: var(--bs-red); font-style: normal; }
+.file-name.warn { color: #997404; font-style: normal; font-weight: 600; }
 .file-pick button { flex: 0 0 auto; white-space: nowrap; }
 
 .save-result { margin-left: 0.5rem; font-size: 0.8125rem; color: var(--bs-green); }
@@ -678,3 +679,47 @@ fieldset.disabled-fieldset { opacity: 0.6; }
 .console .l-D, .console .l-V { color: #808080; }
 .console .l-boot { color: #61afef; font-weight: 600; }
 .console .l-note { color: #808080; font-style: italic; }
+
+/* ---------------- engineering build ---------------- */
+
+.eng-badge {
+  display: inline-block;
+  padding: 0.2em 0.6em;
+  border-radius: var(--bs-border-radius-pill);
+  background: #fff3cd;
+  color: #664d03;
+  border: 1px solid #ffda6a;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.diag-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.75rem;
+}
+.diag-card {
+  background: var(--bs-card-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius-lg);
+  box-shadow: var(--bs-box-shadow);
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+}
+.diag-card h3 { margin: 0 0 0.35rem; font-size: 0.9375rem; }
+.diag-card .row { display: flex; justify-content: space-between; gap: 0.5rem; }
+.diag-card .row span:last-child { font-variant-numeric: tabular-nums; font-weight: 600; }
+.diag-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bs-border-color);
+  margin: 0.4rem 0 0.5rem;
+  overflow: hidden;
+}
+.diag-bar > div { height: 100%; background: var(--bs-blue); }
+.diag-bar.warn > div { background: var(--bs-yellow); }
+.diag-bar.bad > div { background: var(--bs-red); }
+.diag-table td.num, .diag-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.diag-table td.low { color: var(--bs-red); font-weight: 600; }
+.diag-sub { font-size: 0.9375rem; margin: 1rem 0 0.4rem; }
