@@ -89,6 +89,15 @@
     .then(function (j) { return (j && j.docs) || []; })
     .catch(function () { return []; });
   window.SPC.docs.then(function (docs) {
+    /* Прошивка відкриває інструкцію як .../?fw=2.1.6 — переходимо на документацію її лінії. */
+    var fw = (location.search.match(/[?&]fw=([^&#]+)/) || [])[1];
+    if (fw) {
+      fw = decodeURIComponent(fw).replace(/^v?/, 'v');
+      var want = docs.filter(function (d) {
+        try { return new RegExp(d.match).test(fw); } catch (e) { return false; }
+      })[0];
+      if (want && want.id !== DOC_ID) { goDoc(want); return; }
+    }
     var me = docs.filter(function (d) { return d.id === DOC_ID; })[0];
     var latest = docs.filter(function (d) { return d.latest; })[0] || docs[0];
     var wrap = document.getElementById('doc-ver'), sel = document.getElementById('doc-ver-sel');
