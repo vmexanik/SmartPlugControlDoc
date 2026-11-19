@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="uk">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Завантажити прошивку — Smart Plug Control</title>
+    <meta name="description"
+          content="Завантаження файлів прошивки Smart Plug Control: усі версії, звичайна та інженерна збірка, примітки до випуску.">
+    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+    <link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<a class="skip" href="#main">До змісту</a>
+<div class="shell">
+    <aside class="side" id="side">
+        <noscript><a href="index.html">Огляд</a></noscript>
+    </aside>
+    <main id="main">
+
+        <h1>Завантажити прошивку</h1>
+        <p class="lead">Оберіть версію, завантажте файл і встановіть його через веб-інтерфейс хаба
+            (<a href="maintenance.html#ota">як оновити</a>).</p>
+
+        <div class="fw" id="fw" aria-live="polite">
+            <label class="fw-pick" for="fw-select">
+                <span>Версія прошивки</span>
+                <select id="fw-select" disabled>
+                    <option>Завантаження списку…</option>
+                </select>
+            </label>
+            <label class="fw-beta"><input type="checkbox" id="fw-beta"> Показувати бета-версії</label>
+
+            <div class="fw-card" id="fw-card" hidden>
+                <div class="fw-head">
+                    <strong id="fw-title"></strong>
+                    <span id="fw-badges"></span>
+                    <span class="fw-date" id="fw-date"></span>
+                </div>
+                <div class="fw-files" id="fw-files"></div>
+                <div class="fw-notes" id="fw-notes"></div>
+            </div>
+
+            <div class="callout warn" id="fw-error" hidden>
+                <span class="t">Не вдалося отримати список версій</span>
+                <span id="fw-error-text"></span>
+                Усі файли доступні на сторінці
+                <a id="fw-releases-link" href="#" target="_blank" rel="noopener">GitHub Releases</a>.
+            </div>
+        </div>
+
+        <h2 id="which">Який файл обрати</h2>
+        <div class="tscroll">
+            <table>
+                <thead><tr><th>Файл</th><th>Для кого</th></tr></thead>
+                <tbody>
+                <tr>
+                    <td><code>smart_plug_control-X.Y.Z.bin</code><br><span class="pill on">Звичайна</span></td>
+                    <td>Для щоденної роботи. Встановлюйте саме її, якщо не впевнені.</td>
+                </tr>
+                <tr>
+                    <td><code>smart_plug_control-X.Y.Z-eng.bin</code><br><span class="pill warn">Інженерна</span></td>
+                    <td>Та сама версія з інструментами діагностики (консоль журналу, стан пам'яті й Wi-Fi).
+                        Потрібна лише для пошуку несправностей на прохання розробника. Працює трохи повільніше
+                        й займає більше пам'яті. Після діагностики поверніться на звичайну збірку.</td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="callout note">
+            <span class="t">Налаштування зберігаються</span>
+            Оновлення через веб-інтерфейс не стирає розетки й параметри. Можна встановити й старішу версію:
+            якщо вона не запуститься, хаб сам повернеться на попередню.
+        </div>
+
+        <h3>Бета-версії</h3>
+        <p>Позначені як <span class="pill warn">бета</span>: нові функції, які ще перевіряються. За
+            замовчуванням приховані; увімкніть «Показувати бета-версії», щоб побачити їх у списку.</p>
+
+    </main>
+</div>
+<script src="assets/site.js"></script>
+<script src="assets/firmware.js"></script>
+</body>
+</html>

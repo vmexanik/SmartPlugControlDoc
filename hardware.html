@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="uk">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Підключення — Smart Plug Control</title>
+    <meta name="description" content="Піни ESP32-S3, входи AC1, DC1, DC2, модуль ZMPT101B, логіка керування розетками.">
+    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+    <link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<a class="skip" href="#main">До змісту</a>
+<div class="shell">
+    <aside class="side" id="side">
+        <noscript><a href="index.html">Огляд</a></noscript>
+    </aside>
+    <main id="main">
+
+        <h1>Підключення</h1>
+        <p class="lead">Схема підключення</p>
+
+        <figure>
+<div class="tscroll">
+<svg viewBox="0 0 760 484" role="img" aria-labelledby="wiring-t wiring-d" xmlns="http://www.w3.org/2000/svg">
+  <title id="wiring-t">Схема підключення Smart Plug Control HW 1.1</title>
+  <desc id="wiring-d">Клеми живлення L і N підключені через автомат до резервованого живлення (ДБЖ, інвертор або АВР). Клеми AC1 L і N підключені через автомат до напруги, яку потрібно вимірювати. Клеми DC1 і DC2 не підключені. Хаб керує розетками по Wi-Fi.</desc>
+
+  <!-- джерела -->
+  <rect class="dg-box dg-hv" x="10" y="62" width="185" height="72" rx="6"/>
+  <text class="dg-txt dg-b" x="20" y="86">Резервоване живлення</text>
+  <text class="dg-sub" x="20" y="104">ДБЖ / інвертор / АВР</text>
+  <text class="dg-sub" x="20" y="121">~230 В</text>
+
+  <rect class="dg-box dg-hv" x="10" y="168" width="185" height="72" rx="6"/>
+  <text class="dg-txt dg-b" x="20" y="192">Контрольована напруга</text>
+  <text class="dg-sub" x="20" y="210">мережа, яку треба</text>
+  <text class="dg-sub" x="20" y="227">вимірювати, ~230 В</text>
+
+  <!-- проводи живлення -->
+  <path class="dg-l" d="M195 84H420"/>
+  <path class="dg-n" d="M195 110H420"/>
+  <rect class="dg-qf" x="250" y="77" width="44" height="14" rx="2"/>
+  <text class="dg-sub" x="272" y="70" text-anchor="middle">QF1</text>
+  <text class="dg-sub" x="203" y="79">L</text>
+  <text class="dg-sub" x="203" y="105">N</text>
+
+  <!-- проводи AC1 -->
+  <path class="dg-l" d="M195 190H420"/>
+  <path class="dg-n" d="M195 216H420"/>
+  <rect class="dg-qf" x="250" y="183" width="44" height="14" rx="2"/>
+  <text class="dg-sub" x="272" y="176" text-anchor="middle">QF2</text>
+  <text class="dg-sub" x="203" y="185">L</text>
+  <text class="dg-sub" x="203" y="211">N</text>
+
+  <!-- пристрій -->
+  <rect class="dg-mcu" x="420" y="20" width="190" height="424" rx="8"/>
+  <text class="dg-txt dg-b" x="515" y="40" text-anchor="middle">Smart Plug Control</text>
+  <text class="dg-sub" x="515" y="55" text-anchor="middle">HW 1.1</text>
+
+  <text class="dg-sub dg-b" x="436" y="73">Живлення ~ 100–240 В</text>
+  <circle class="dg-term on" cx="420" cy="84" r="4.5"/>
+  <text class="dg-txt" x="436" y="88">L</text>
+  <circle class="dg-term on" cx="420" cy="110" r="4.5"/>
+  <text class="dg-txt" x="436" y="114">N</text>
+
+  <text class="dg-sub dg-b" x="436" y="179">Вхід AC1 ~ 15–300 В</text>
+  <circle class="dg-term on" cx="420" cy="190" r="4.5"/>
+  <text class="dg-txt" x="436" y="194">L</text>
+  <circle class="dg-term on" cx="420" cy="216" r="4.5"/>
+  <text class="dg-txt" x="436" y="220">N</text>
+
+  <text class="dg-sub dg-b" x="436" y="284">Вхід DC1 = 5–24 В</text>
+  <circle class="dg-term" cx="420" cy="298" r="4.5"/>
+  <text class="dg-txt" x="436" y="302">+</text>
+  <circle class="dg-term" cx="420" cy="322" r="4.5"/>
+  <text class="dg-txt" x="436" y="326">−</text>
+
+  <text class="dg-sub dg-b" x="436" y="368">Вхід DC2 = 5–24 В</text>
+  <circle class="dg-term" cx="420" cy="382" r="4.5"/>
+  <text class="dg-txt" x="436" y="386">+</text>
+  <circle class="dg-term" cx="420" cy="406" r="4.5"/>
+  <text class="dg-txt" x="436" y="410">−</text>
+
+
+  <!-- керування розетками -->
+  <path class="dg-open" d="M610 250H640"/>
+  <rect class="dg-box" x="642" y="218" width="108" height="64" rx="6"/>
+  <text class="dg-txt dg-b" x="652" y="242">Розетки</text>
+  <text class="dg-sub" x="652" y="260">керування</text>
+  <text class="dg-sub" x="652" y="275">по Wi-Fi</text>
+
+</svg>
+</div>
+<figcaption>Схема підключення. Живлення: від резервованої лінії (ДБЖ, інвертор, АВР). AC1: до напруги, яку треба вимірювати. DC1 і DC2: не підключати. Назви клем на платі можуть відрізнятися.</figcaption>
+</figure>
+
+        <h2 id="inputs">Як працюють входи</h2>
+
+        <h3>DC1 і DC2</h3>
+        <p>Дискретний вхід. Напруга спрацювання 5-24 В</p>
+
+        <h3>AC1</h3>
+        <p>Аналоговий вхід</p>
+        <p>Вимірювання, межі спрацювання й калібрування описані на сторінці <a href="ac.html">Напруга мережі (AC1)</a>.</p>
+
+        <h2 id="logic">Правило керування розеткою</h2>
+        <p>Кожна розетка прив'язується до одного входу (або до жодного, тоді нею керують лише вручну).</p>
+        <ul>
+            <li>Вхід активний, розетка <strong>Вмикається</strong>. Вхід неактивний, розетка <strong>Вимикається</strong>.</li>
+            <li>Є можливість <strong>«Інверсії»</strong> входу.
+            </li>
+            <li><strong>«Затримка увімкнення»</strong> (0–600 с) утримує розетку вимкненою певний час після того, як
+                вхід став «дозволяючим».
+            </li>
+        </ul>
+
+        <table>
+            <tr>
+                <th>Вхід</th>
+                <th>Інверсія вимкнена</th>
+                <th>Інверсія ввімкнена</th>
+            </tr>
+            <tr>
+                <td>активний</td>
+                <td>ON (з урахуванням затримки)</td>
+                <td>OFF (миттєво)</td>
+            </tr>
+            <tr>
+                <td>неактивний</td>
+                <td>OFF (миттєво)</td>
+                <td>ON (з урахуванням затримки)</td>
+            </tr>
+        </table>
+
+        <div class="callout note">
+            <span class="t">Розетка під керуванням входу не перемикається вручну</span>
+            Якщо розетка прив'язана до входу, то ручне керування нею заблоковане.
+          Щоб керувати вручну, виберіть у розетки вхід «— (тільки вручну)».
+        </div>
+
+    </main>
+</div>
+<script src="assets/site.js"></script>
+</body>
+</html>

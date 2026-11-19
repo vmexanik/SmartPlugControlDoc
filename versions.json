@@ -1,0 +1,11 @@
+{
+  "docs": [
+    {
+      "id": "2.x",
+      "label": "2.x",
+      "path": "",
+      "match": "^v?2\\.",
+      "latest": true
+    }
+  ]
+}
