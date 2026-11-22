@@ -2,6 +2,15 @@
   'use strict';
 
   const $ = (sel) => document.querySelector(sel);
+
+  /* iOS captive-network assistant / Android WebView "sign in to network"
+   * window: no file pickers, no downloads, closes when the network changes. */
+  const inCaptivePortal = (() => {
+    const ua = navigator.userAgent;
+    const iosCna = /iP(hone|ad|od)/.test(ua) && !/Safari\//.test(ua) && !/(CriOS|FxiOS|EdgiOS)/.test(ua);
+    const androidWv = /Android/.test(ua) && /; wv\)/.test(ua);
+    return iosCna || androidWv;
+  })();
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
   async function api(path, opts) {
@@ -12,7 +21,9 @@
     try { data = await res.json(); } catch (e) { /* empty body */ }
     if (!res.ok) {
       const msg = (data && data.error) ? data.error : ('HTTP ' + res.status);
-      throw new Error(msg);
+      const err = new Error(msg);
+      err.status = res.status;
+      throw err;
     }
     return data;
   }
@@ -117,7 +128,7 @@
        * index.html and is never touched here directly -- renderUptime()
        * writes to it exactly once, at seed time (see below). */
       $('#wifi-status-line').innerHTML = wifiTxt;
-      $('#ap-ip-val').textContent = s.wifi.ap_ip;
+      $('#ap-ip-val').textContent = s.wifi.ap_on === false ? 'вимкнена' : s.wifi.ap_ip;
       $('#inputs-status-line').textContent = inputsTxt;
       applyBuildFlags(s);
       /* Seed the uptime clock from the device's real uptime_s exactly
@@ -287,6 +298,10 @@
      * window (where this is the only thing stopping the modal). */
     card.addEventListener('click', (ev) => {
       if (ev.target.closest('.device-action')) return;
+      if (ev.target.closest('[data-act="check"]')) {
+        recheckPlug(data.id, ev.target.closest('[data-act="check"]'));
+        return;
+      }
       openPlugModal(data);
     });
     const btn = card.querySelector('[data-act="toggle"]');
@@ -350,12 +365,54 @@
     else if (offline) toggleTitle = 'Розетка не на зв\'язку';
     else toggleTitle = p.last_state ? 'Вимкнути' : 'Увімкнути';
 
-    nameEl.innerHTML = `${escapeHtml(p.name)}${p.enabled ? '' : ' <span class="hint">(вимкнена)</span>'}${offline ? ' <span class="hint bad">(не на зв\'язку)</span>' : ''}${metricsHtml}`;
+    /* ESPHome native API keepalive (esphome_api.h): without a connected
+     * API client the plug reboots every api: reboot_timeout (15 min). */
+    let apiHint = '';
+    if (p.esph_api === 'encrypted' || p.esph_api === 'bad_password') {
+      const why = p.esph_api === 'encrypted' ? 'увімкнено шифрування API' : 'на API встановлено пароль';
+      apiHint = ` <span class="hint bad" title="На розетці ${why}, хаб не може тримати з'єднання native API, тому ESPHome перезавантажуватиме її кожні 15 хв. Перепрошийте розетку з «api: reboot_timeout: 0s» або без шифрування/пароля.">(перезавантажується кожні 15 хв)</span>`;
+    }
+
+    /* plug_t.problem (plug_manager.c): why a polled plug isn't working.
+     * Configuration errors won't fix themselves -- say what to change. */
+    const PROBLEM_TEXT = {
+      offline: ['не на зв\'язку', 'Розетка не відповідає. Хаб перевіряє її все рідше (до разу на 5 хв); «Перевірити» — одразу.'],
+      http_api_off: ['вимкнено HTTP API', 'На розетці Tasmota вимкнено HTTP API (з версії 15.5 так за замовчуванням). Увімкніть: Configuration → Other → HTTP API. Хаб перевіряє раз на 15 хв.'],
+      wrong_driver: ['не той драйвер?', 'Пристрій відповідає, але не як вибрана прошивка (404 або чужа відповідь). Перевірте драйвер / протокол і адресу в налаштуваннях розетки.'],
+      auth: ['потрібен пароль', 'Розетка вимагає логін і пароль (або вони невірні). Вкажіть їх у налаштуваннях розетки.'],
+    };
+    let problemHtml = '';
+    let pr = PROBLEM_TEXT[p.problem] || (offline ? PROBLEM_TEXT.offline : null);
+    /* ESPHome >= 2026.7 404s the old object_id URLs ("switch/relay") saved
+     * before -- re-reading the entities gives the name-based ones. */
+    if (p.problem === 'wrong_driver' && p.http && p.http.family === 'esphome') {
+      pr = ['не той драйвер?', 'Пристрій відповідає 404 на збережені адреси сутностей. Якщо ESPHome оновлювали (з 2026.7 адреси за назвою сутності), відкрийте налаштування розетки, натисніть «Знайти сутності» і збережіть.'];
+    }
+    if (pr) {
+      problemHtml = ` <span class="hint bad" title="${escapeHtml(pr[1])}">(${pr[0]})</span>` +
+        (p.problem && p.problem !== 'offline' ? `<div class="hint bad plug-problem">${escapeHtml(pr[1])}</div>` : '') +
+        ' <button type="button" class="link-btn" data-act="check">Перевірити</button>';
+    }
+
+    nameEl.innerHTML = `${escapeHtml(p.name)}${p.enabled ? '' : ' <span class="hint">(вимкнена)</span>'}${problemHtml}${apiHint}${metricsHtml}`;
     inputEl.innerHTML = p.input === 'NONE' ? '<span class="hint">без входу</span>' : p.input;
     stateEl.innerHTML = statePill;
     btn.className = `device-action-btn ${p.last_state ? 'state-on' : 'state-off'}${toggleDisabled ? ' is-blocked' : ''}`;
     btn.title = toggleTitle;
     btn.setAttribute('aria-label', `Перемкнути ${escapeHtml(p.name)}`);
+  }
+
+  /* "Перевірити": the hub polls the plug right away (POST .../check), the
+   * verdict shows up in /api/plugs a few seconds later. */
+  async function recheckPlug(id, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Перевіряю…'; }
+    try {
+      await api(`/api/plugs/${id}/check`, { method: 'POST' });
+      await new Promise((r) => setTimeout(r, 4000));
+    } catch (e) {
+      toast(e.message, true);
+    }
+    await loadPlugs();
   }
 
   /* Tracks plugs with a request currently in flight so a second click before
@@ -662,8 +719,13 @@
     if (id) deletePlug(id, name);
   });
 
+  /* Locked while a save is in flight: a quick double click used to create
+   * two identical plugs (the backend now also refuses duplicates, 409). */
+  let plugSaving = false;
+
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
+    if (plugSaving) return;
     rebuildKnownUrls(); /* in case the host field changed without a trailing keystroke reaching 'input' */
     const id = $('#pf-id').value;
     const { driver } = splitDriverValue();
@@ -719,6 +781,10 @@
       return;
     }
 
+    const submitBtn = form.querySelector('button[type="submit"]');
+    plugSaving = true;
+    submitBtn.disabled = true;
+    $('#plug-form-error').textContent = '';
     try {
       if (id) {
         await api(`/api/plugs/${id}`, { method: 'PUT', body: JSON.stringify(body) });
@@ -728,7 +794,10 @@
       closePlugModal();
       await loadPlugs();
     } catch (e) {
-      $('#plug-form-error').textContent = 'Помилка: ' + e.message;
+      $('#plug-form-error').textContent = e.status === 409 ? e.message : 'Помилка: ' + e.message;
+    } finally {
+      plugSaving = false;
+      submitBtn.disabled = false;
     }
   });
 
@@ -771,6 +840,7 @@
       typeCell = `<span class="pill on" title="${escapeHtml(title)}">${escapeHtml(familyTxt)}</span>`;
       if (KIND_WARNING[r.kind]) typeCell += ` <span class="hint">${KIND_WARNING[r.kind]}</span>`;
       if (r.needs_auth) typeCell += ' <span class="hint">(потрібен пароль)</span>';
+      if (r.http_api_off) typeCell += ' <span class="hint bad" title="Увімкніть на розетці: Configuration → Other → HTTP API">(вимкнено HTTP API)</span>';
     }
 
     tr.innerHTML = `
@@ -872,11 +942,28 @@
     $('#btn-scan-stop').disabled = !running;
   }
 
-  $('#btn-scan-network').addEventListener('click', () => {
+  /* Shows progress of the scan that is running on the hub right now --
+   * started by this click or already going (another tab/phone). */
+  function attachToScan() {
+    scanDotsFrame = 0;
+    $('#scan-status').textContent = 'Іде пошук';
+    setScanRunningUi(true);
+    stopScanPoll();
+    scanPoll = setInterval(pollScanStatus, 1000);
+    pollScanStatus();
+  }
+
+  $('#btn-scan-network').addEventListener('click', async () => {
     $('#scan-status').textContent = 'Натисніть "Почати пошук"';
     $('#scan-tbody').innerHTML = '';
     setScanRunningUi(false);
     scanModal.classList.remove('hidden');
+    /* A scan may already be running (opened on another device): join it
+     * instead of offering a start button that would only get a 409. */
+    try {
+      const s = await api('/api/scan');
+      if (s.running) attachToScan();
+    } catch (e) { /* not fatal: the start button still works */ }
   });
 
   /* Stops the backend scan but leaves the modal open -- pollScanStatus()
@@ -900,17 +987,20 @@
 
   $('#btn-scan-go').addEventListener('click', async () => {
     const statusEl = $('#scan-status');
+    const goBtn = $('#btn-scan-go');
+    if (goBtn.disabled) return;
+    goBtn.disabled = true;   /* until the POST answers: no second start */
     try {
       await api('/api/scan', { method: 'POST' });
       $('#scan-tbody').innerHTML = '';
-      scanDotsFrame = 0;
-      statusEl.textContent = 'Іде пошук';
-      setScanRunningUi(true);
-      stopScanPoll();
-      scanPoll = setInterval(pollScanStatus, 1000);
-      pollScanStatus();
+      attachToScan();
     } catch (e) {
-      statusEl.innerHTML = `<span class="bad">Помилка: ${e.message}</span>`;
+      if (e.status === 409 && /already running/.test(e.message)) {
+        attachToScan();      /* someone else's scan: just show its progress */
+        return;
+      }
+      goBtn.disabled = false;
+      statusEl.innerHTML = `<span class="bad">Помилка: ${escapeHtml(e.message)}</span>`;
     }
   });
 
@@ -1296,7 +1386,10 @@
         ? `<span class="good">STA: "${escapeHtml(w.ssid)}", IP ${w.sta_ip}</span>`
         : `<span class="bad">STA: Не підключено${w.ssid ? ` (збережено SSID "${escapeHtml(w.ssid)}")` : ''}</span>`) +
         failedNote +
-        `<br>AP: ${w.ap_ssid ? `"${escapeHtml(w.ap_ssid)}", ` : ''}IP ${w.ap_ip}`;
+        (w.ap_on === false
+          ? '<br>AP: вимкнена (режим «Авто», увімкнеться сама, якщо зникне Wi-Fi)'
+          : `<br>AP: ${w.ap_ssid ? `"${escapeHtml(w.ap_ssid)}", ` : ''}IP ${w.ap_ip}`);
+      if (w.ap_mode && document.activeElement !== $('#ap-mode')) $('#ap-mode').value = w.ap_mode;
       /* Prefill both fields with the real stored values -- otherwise
        * clicking "Підключити" without retyping the password resubmits an
        * empty one and silently breaks a working connection. */
@@ -1308,6 +1401,66 @@
     }
   }
 
+  /* ---------------- after STA connect: move to the new address ----------------
+   * The page is usually open on the setup AP (192.168.4.1) when the user
+   * enters Wi-Fi credentials. It can't redirect right away: the phone is
+   * still on the AP and can't see 192.168.x.x. So: show the new address and
+   * keep probing http://<IP>/favicon.svg as an <img> (no CORS needed) every
+   * 2 s -- as soon as it loads, the phone has reached the LAN, go there. */
+  let staProbeTimer = null;
+
+  function showStaMoved(w) {
+    const url = `http://${w.sta_ip}/`;
+    $('#sta-moved-ssid').textContent = `«${w.ssid}»`;
+    $('#sta-moved-ssid2').textContent = `«${w.ssid}»`;
+    $('#sta-moved-ip').textContent = w.sta_ip;
+    $('#sta-moved-host').textContent = w.hostname ? `${w.hostname}.local` : '';
+    $('#sta-moved-go').href = url;
+    $('#sta-moved-portal').classList.toggle('hidden', !inCaptivePortal);
+    $('#sta-moved').classList.remove('hidden');
+    $('#sta-moved').scrollIntoView({ block: 'nearest' });
+
+    if (staProbeTimer) clearInterval(staProbeTimer);
+    const probe = () => {
+      const img = new Image();
+      img.onload = () => {
+        clearInterval(staProbeTimer);
+        staProbeTimer = null;
+        location.href = url;
+      };
+      img.src = `http://${w.sta_ip}/favicon.svg?probe=${Date.now()}`;
+    };
+    staProbeTimer = setInterval(probe, 2000);
+    probe();
+  }
+
+  /* Polls /api/wifi after "Підключити" until STA has an IP (or failed). */
+  async function waitForStaConnect() {
+    const result = $('#wifi-save-result');
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000));
+      let w;
+      try { w = await api('/api/wifi'); } catch (e) { continue; }
+      if (w.config_error) {
+        result.textContent = 'Не вдалося підключитися: перевірте SSID і пароль.';
+        result.className = 'save-result error';
+        loadWifiStatus();
+        return;
+      }
+      if (w.connected && w.sta_ip && w.sta_ip !== '0.0.0.0') {
+        result.textContent = `Підключено, IP ${w.sta_ip}`;
+        result.className = 'save-result';
+        loadWifiStatus();
+        if (location.hostname !== w.sta_ip && location.hostname !== `${w.hostname}.local`.toLowerCase()) {
+          showStaMoved(w);
+        }
+        return;
+      }
+    }
+    loadWifiStatus();
+  }
+
   $('#btn-save-wifi').addEventListener('click', async () => {
     const result = $('#wifi-save-result');
     const ssid = $('#wifi-ssid').value.trim();
@@ -1317,10 +1470,40 @@
       await api('/api/wifi', { method: 'POST', body: JSON.stringify({ ssid, password }) });
       result.textContent = 'Збережено, з’єднання встановлюється…';
       result.className = 'save-result';
-      setTimeout(loadWifiStatus, 3000);
+      waitForStaConnect();
+    } catch (e) {
+      if (!e.status) {
+        /* No HTTP answer at all: the hub drops its STA link right away to
+         * reconnect, so over the LAN the reply is often lost. The request
+         * did arrive -- wait for the reconnect instead of reporting it. */
+        result.textContent = 'Зв’язок перервався — пристрій перепідключається…';
+        result.className = 'save-result';
+        waitForStaConnect();
+        return;
+      }
+      result.textContent = 'Помилка: ' + e.message;
+      result.className = 'save-result error';
+    }
+  });
+
+  /* ---------------- soft-AP mode (always / auto) ---------------- */
+  $('#ap-mode').addEventListener('change', async () => {
+    const sel = $('#ap-mode');
+    const result = $('#ap-mode-result');
+    sel.disabled = true;
+    try {
+      await api('/api/wifi/ap', { method: 'POST', body: JSON.stringify({ mode: sel.value }) });
+      result.textContent = sel.value === 'auto'
+        ? 'Збережено. Точка доступу вимкнеться через 5 хв після підключення до Wi-Fi.'
+        : 'Збережено. Точка доступу увімкнена постійно.';
+      result.className = 'save-result';
+      setTimeout(loadWifiStatus, 1500);
     } catch (e) {
       result.textContent = 'Помилка: ' + e.message;
       result.className = 'save-result error';
+      loadWifiStatus();
+    } finally {
+      sel.disabled = false;
     }
   });
 
@@ -1591,14 +1774,10 @@
 
   /* Captive-portal mini browsers (iOS CNA, Android WebView) can't open file
    * pickers or save downloads. Detect them and tell the user to switch. */
-  (() => {
-    const ua = navigator.userAgent;
-    const iosCna = /iP(hone|ad|od)/.test(ua) && !/Safari\//.test(ua) && !/(CriOS|FxiOS|EdgiOS)/.test(ua);
-    const androidWv = /Android/.test(ua) && /; wv\)/.test(ua);
-    if (!iosCna && !androidWv) return;
+  if (inCaptivePortal) {
     $('#portal-url').textContent = location.origin + '/';
     $('#portal-warn').classList.remove('hidden');
-  })();
+  }
   $('#btn-con-clear').addEventListener('click', async () => {
     if (!confirm('Очистити буфер консолі на пристрої?')) return;
     try {
@@ -1664,13 +1843,23 @@
   function memCard(title, m) {
     if (!m || !m.total) return `<div class="diag-card"><h3>${title}</h3><span class="hint">немає</span></div>`;
     const used = 100 - (m.free * 100 / m.total);
-    const minPct = m.min_free * 100 / m.total;
-    const cls = minPct < 5 ? 'bad' : minPct < 15 ? 'warn' : '';
+    const freePct = m.free * 100 / m.total;
+    const cls = freePct < 5 ? 'bad' : freePct < 15 ? 'warn' : '';
     return `<div class="diag-card"><h3>${title}</h3>
+      <div class="row"><span>Зайнято</span><span>${used.toFixed(1)} %</span></div>
       <div class="diag-bar ${cls}"><div style="width:${used.toFixed(1)}%"></div></div>
-      <div class="row"><span>Вільно</span><span>${kb(m.free)} з ${kb(m.total)}</span></div>
-      <div class="row"><span>Найбільший блок</span><span>${kb(m.largest)}</span></div>
-      <div class="row"><span>Мінімум з запуску</span><span>${kb(m.min_free)}</span></div></div>`;
+      <div class="row"><span>Вільно</span><span>${kb(m.free)} з ${kb(m.total)}</span></div></div>`;
+  }
+
+  /* cpu = [load core0, load core1] in %, -1 = unknown (no IDLE task found). */
+  function cpuCard(cpu) {
+    if (!cpu || !cpu.length) return '<div class="diag-card"><h3>Процесор</h3><span class="hint">немає</span></div>';
+    return `<div class="diag-card"><h3>Процесор</h3>` + cpu.map((l, i) => {
+      if (l < 0) return `<div class="row"><span>Ядро ${i}</span><span>—</span></div>`;
+      const cls = l > 90 ? 'bad' : l > 70 ? 'warn' : '';
+      return `<div class="row"><span>Ядро ${i}</span><span>${l.toFixed(1)} %</span></div>
+        <div class="diag-bar ${cls}"><div style="width:${l.toFixed(1)}%"></div></div>`;
+    }).join('') + '</div>';
   }
 
   function fmtWhen(d, nowUptime) {
@@ -1684,7 +1873,7 @@
 
   function renderDiag(d) {
     $('#diag-mem').innerHTML = memCard('Внутрішня RAM', d.mem && d.mem.internal) +
-      memCard('PSRAM', d.mem && d.mem.psram);
+      memCard('PSRAM', d.mem && d.mem.psram) + cpuCard(d.cpu);
 
     const tasks = (d.tasks || []).slice().sort((a, b) => a.name.localeCompare(b.name));
     $('#diag-tasks').innerHTML = tasks.map((t) => `<tr>

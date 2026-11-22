@@ -36,6 +36,13 @@
   Для прошивки та збереження консолі відкрийте <b id="portal-url"></b> у Safari / Chrome.
 </div>
 
+<div id="sta-moved" class="sta-moved hidden">
+  <div>Пристрій підключився до Wi-Fi <b id="sta-moved-ssid"></b>. Нова адреса: <b id="sta-moved-ip"></b> або <b id="sta-moved-host"></b></div>
+  <div id="sta-moved-hint" class="hint">Підключіть цей телефон / комп'ютер до мережі <b id="sta-moved-ssid2"></b> — сторінка перейде на нову адресу сама.</div>
+  <div id="sta-moved-portal" class="hint hidden">Вікно входу в мережу закриється при зміні мережі: відкрийте нову адресу в Safari / Chrome.</div>
+  <a id="sta-moved-go" class="btn primary" href="#">Перейти</a>
+</div>
+
 <main>
   <section id="tab-plugs" class="tab-content active">
     <div class="toolbar">
@@ -103,6 +110,17 @@
     </div>
     <button id="btn-save-wifi" class="primary">Підключити</button>
     <span id="wifi-save-result" class="save-result"></span>
+
+    <div class="form-grid">
+      <label>Власна точка доступу (AP)
+        <select id="ap-mode">
+          <option value="always">Завжди увімкнена</option>
+          <option value="auto">Авто: лише коли немає Wi-Fi</option>
+        </select>
+      </label>
+    </div>
+    <p class="hint">«Авто»: точка доступу вимикається через 5 хв після підключення до Wi-Fi (якщо до неї ніхто не підключений) і сама вмикається, якщо зв'язку з Wi-Fi немає довше 1 хв або пароль Wi-Fi не підходить. Повністю вимкнути її не можна: з невірним паролем пристрій став би недоступним.</p>
+    <span id="ap-mode-result" class="save-result"></span>
 
     <div class="form-grid">
       <label>Пароль власної точки доступу (AP), 8–63 символи
@@ -203,7 +221,8 @@
       <button id="btn-diag-pause">Пауза</button>
     </div>
 
-    <h2>Пам'ять</h2>
+    <h2>Пам'ять і процесор</h2>
+    <p class="hint">Завантаження ядра = 100 % мінус частка його задачі IDLE з попереднього оновлення.</p>
     <div class="diag-cards" id="diag-mem"></div>
 
     <h2>Задачі</h2>
@@ -326,8 +345,8 @@
           </div>
         </div>
         <div class="form-row">
-          <label>Basic-auth логін <input type="text" id="pf-http-user"></label>
-          <label>Basic-auth пароль <input type="password" id="pf-http-pass"></label>
+          <label>Логін (якщо на пристрої задано) <input type="text" id="pf-http-user"></label>
+          <label>Пароль <input type="password" id="pf-http-pass"></label>
         </div>
       </fieldset>
 

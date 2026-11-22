@@ -235,6 +235,29 @@ tr:last-child td { border-bottom: none; }
 .pill.fail { background: var(--bs-red); color: #fff; }
 
 .hidden { display: none !important; }
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  color: #0d6efd;
+  text-decoration: underline;
+  font-size: 13px;
+  cursor: pointer;
+}
+.plug-problem { font-size: 12px; margin-top: 2px; }
+
+.sta-moved {
+  margin: 8px 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #d1e7dd;
+  color: #0f5132;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.sta-moved .btn { display: inline-block; margin-top: 6px; padding: 6px 14px; border-radius: 6px; text-decoration: none; }
+.sta-moved .btn.primary { background: #198754; color: #fff; }
+
 .portal-warn {
   margin: 8px 12px;
   padding: 10px 12px;

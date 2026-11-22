@@ -15,7 +15,7 @@
   /* ?eng=1 -- інженерна збірка: вкладки «Консоль» і «Діагностика». Без нього
    * демо поводиться як звичайна збірка (ці API віддають 404, як на пристрої). */
   var ENG = /[?&]eng(=1)?(&|$)/.test(location.search);
-  var VERSION = ENG ? '2.1.7-eng' : '2.1.7';
+  var VERSION = ENG ? '2.1.8-eng' : '2.1.8';
 
   var state, sim, scan, wifiScan, nextId, timer, con, dbg;
 
@@ -28,6 +28,7 @@
       mqtt: { cmd_topic: '', payload_on: 'on', payload_off: 'off', state_topic: '', qos: 0, retain: false },
       zigbee: { note: '' },
       last_state: false, last_cmd_ok: true, reachable: true,
+      problem: '',    /* '' | offline | http_api_off | wrong_driver | auth (2.1.8) */
       metrics: { valid: false, power_w: 0, voltage_v: 0, current_a: 0, updated_us: 0 },
       _w: 0,          /* потужність у ввімкненому стані (для симуляції) */
       _due: 0         /* час відкладеного вмикання, мс */
@@ -51,7 +52,8 @@
         plugBase({ id: 1, name: 'Бойлер', input: 'AC1', on_delay_s: 10, http: shellyG1('192.168.1.41'), last_state: true, _w: 1480 }),
         plugBase({ id: 2, name: 'Насос', input: 'DC1', http: shellyG2('192.168.1.42'), last_state: false, _w: 320 }),
         plugBase({ id: 3, name: 'Підсвітка', input: 'NONE', http: tasmota('192.168.1.43'), last_state: true, _w: 8.4 }),
-        plugBase({ id: 4, name: 'Гараж: обігрівач', input: 'DC2', reachable: false, http: shellyG1('192.168.1.44'), last_state: false, _w: 900 }),
+        plugBase({ id: 6, name: 'Вентилятор', input: 'NONE', reachable: false, problem: 'http_api_off', http: tasmota('192.168.1.46'), last_state: false, _w: 35 }),
+        plugBase({ id: 4, name: 'Гараж: обігрівач', input: 'DC2', reachable: false, problem: 'offline', http: shellyG1('192.168.1.44'), last_state: false, _w: 900 }),
         plugBase({ id: 5, name: 'Кавоварка', input: 'NONE', http: esphome('192.168.1.45'), last_state: false, _w: 1150 })
       ],
       inputs: [
@@ -61,7 +63,7 @@
       ],
       mqtt: { mqtt_uri: '', mqtt_client_id: 'smartplug-demo', mqtt_user: '', mqtt_pass: '' },
       ac: { v_min: 198, v_max: 253, f_min: 49.5, f_max: 50.5, cal_k: K_FACTORY },
-      wifi: { ssid: 'Home-2.4G', password: 'demo-password', connected: true, config_error: false, sta_ip: '192.168.1.50', ap_ip: '192.168.4.1', ap_ssid: 'SmartPlug-A1B2C3', ap_password: 'plugsetup' },
+      wifi: { ssid: 'Home-2.4G', password: 'demo-password', connected: true, config_error: false, sta_ip: '192.168.1.50', ap_ip: '192.168.4.1', ap_ssid: 'SmartPlug-A1B2C3', ap_password: 'plugsetup', ap_mode: 'always', ap_on: true, hostname: 'SmartPlug-A1B2C3' },
       time: { source: 'ntp', offset: 0 },
       log: [
         { t: now - 3 * 86400 - 3600, src: 'boot', plug: '', action: 'reset_reason', ok: true, detail: 'power-on' },
@@ -69,7 +71,8 @@
         { t: now - 5400, src: 'ac_mon', plug: 'Бойлер', action: 'off', ok: true, detail: 'AC1 out of band' },
         { t: now - 5100, src: 'ac_mon', plug: 'Бойлер', action: 'on', ok: true, detail: 'AC1 back in band' },
         { t: now - 3600, src: 'system', plug: '', action: 'heartbeat', ok: true, detail: 'uptime=3d 1h, free_sram=61 KB, sta=up' },
-        { t: now - 900, src: 'system', plug: 'Гараж: обігрівач', action: 'unreachable', ok: false, detail: 'plug not reachable (offline)' }
+        { t: now - 1500, src: 'system', plug: 'Вентилятор', action: 'config_error', ok: false, detail: 'на розетці вимкнено HTTP API (Configuration → Other → HTTP API); опитування раз на 15 хв' },
+        { t: now - 900, src: 'system', plug: 'Гараж: обігрівач', action: 'offline', ok: false, detail: 'не відповідає: ESP_ERR_HTTP_CONNECT' }
       ]
     };
     return s;
@@ -146,9 +149,10 @@
     return {
       uptime_s: up,
       mem: {
-        internal: { total: 360283, free: 121000 + Math.round(jitter(1500)), largest: 31744, min_free: 98712 },
-        psram: { total: 8238104, free: 8121000 + Math.round(jitter(4000)), largest: 7995392, min_free: 8085120 }
+        internal: { total: 358731, free: 113700 + Math.round(jitter(1500)) },
+        psram: { total: 8232728, free: 8083000 + Math.round(jitter(4000)) }
       },
+      cpu: [Math.max(0, 100 - cpuIdle), Math.max(0, 101.5 - cpuIdle)],   /* % per core, -1 = unknown */
       tasks: [
         t('IDLE0', 'ready', 0, 0, 820, cpuIdle), t('IDLE1', 'ready', 0, 1, 820, cpuIdle - 1.5),
         t('httpd', 'running', 5, -1, 10480, 1.2), t('tcpip', 'blocked', 18, -1, 1668, 0.6),
@@ -158,7 +162,8 @@
         t('gpio_input_poll', 'blocked', 5, -1, 2048, 0.07), t('sys_health', 'blocked', 2, -1, 2656, 0.01),
         t('wifi_roam', 'blocked', 3, -1, 2672, 0.01), t('led_status', 'blocked', 1, -1, 900, 0.01),
         t('captive_dns', 'blocked', 5, -1, 1732, 0.02), t('mdns', 'blocked', 1, 0, 2400, 0.03),
-        t('esp_timer', 'suspended', 22, 0, 3040, 0.2)
+        t('esp_timer', 'suspended', 22, 0, 3040, 0.2), t('esph_api', 'blocked', 3, -1, 6516, 0.4),
+        t('wifi_ap', 'blocked', 3, -1, 1644, 0.01)
       ],
       wifi: {
         hostname: 'SmartPlug-A1B2C3',
@@ -251,6 +256,7 @@
   function publicPlug(p) {
     var o = clone(p);
     delete o._w; delete o._due;
+    if (p.http.family === 'esphome') o.esph_api = p.reachable ? 'connected' : 'connecting';
     return o;
   }
 
@@ -262,6 +268,7 @@
     { ip: '192.168.1.63', name: 'tasmota-9F3C12', http: true, family: 'tasmota', kind: 'plug', model: 'Sonoff S31', needs_auth: false, ping_ok: true },
     { ip: '192.168.1.64', name: 'tasmota-strip-4B77', http: true, family: 'tasmota', kind: 'relay', model: 'Power strip 4ch', needs_auth: true, ping_ok: true },
     { ip: '192.168.1.65', name: 'esphome-kitchen', http: true, family: 'esphome', kind: 'plug', model: '', needs_auth: false, ping_ok: false, on_url: 'http://192.168.1.65/switch/relay/turn_on', off_url: 'http://192.168.1.65/switch/relay/turn_off', use_post: true },
+    { ip: '192.168.1.66', name: 'tasmota-F1A0C3', http: true, family: 'tasmota', kind: 'plug', model: 'Tasmota', needs_auth: false, http_api_off: true, ping_ok: true, on_url: 'http://192.168.1.66/cm?cmnd=Power1%20On', off_url: 'http://192.168.1.66/cm?cmnd=Power1%20Off' },
     { ip: '192.168.1.70', name: '', http: false, family: 'unknown', kind: 'unknown', model: '', needs_auth: false, ping_ok: true }
   ];
 
@@ -305,6 +312,17 @@
     return p;
   }
 
+  function plugHost(p) {
+    var m = /^https?:\/\/([^/]+)/i.exec((p.http && p.http.on_url) || '');
+    return p.driver === 'http' && m ? m[1].toLowerCase() : '';
+  }
+  function checkDup(b, selfId) {
+    var h = plugHost({ driver: b.driver || 'http', http: b.http || {} });
+    if (!h) return;
+    var d = state.plugs.find(function (p) { return p.id !== selfId && plugHost(p) === h; });
+    if (d) throw httpError(409, 'Ця розетка вже додана: ' + d.name);
+  }
+
   function route(method, url, opts) {
     var u = new URL(url, 'http://demo.local');
     var path = u.pathname, m;
@@ -315,7 +333,7 @@
       return {
         uptime_s: 3 * 86400 + 4 * 3600 + Math.floor((Date.now() - T_START) / 1000),
         version: VERSION, eng: ENG,
-        wifi: { sta_connected: state.wifi.connected, ssid: state.wifi.ssid, sta_ip: state.wifi.sta_ip, rssi: -58, config_error: state.wifi.config_error, ap_ip: state.wifi.ap_ip },
+        wifi: { sta_connected: state.wifi.connected, ssid: state.wifi.ssid, sta_ip: state.wifi.sta_ip, rssi: -58, config_error: state.wifi.config_error, ap_ip: state.wifi.ap_ip, ap_on: state.wifi.ap_on },
         inputs: state.inputs.map(function (i) { return { label: i.label, enabled: i.enabled, level: inputLevel(i.label) }; }),
         ac_mon: {
           have_reading: true, mains_present: mainsPresent(),
@@ -329,6 +347,7 @@
     if (path === '/api/plugs' && method === 'GET') return state.plugs.map(publicPlug);
     if (path === '/api/plugs' && method === 'POST') {
       if (state.plugs.length >= 16) throw httpError(400, 'достатньо розеток (демо: максимум 16)');
+      checkDup(body, 0);
       var np = buildPlug(body);
       state.plugs.push(np);
       addLog('api', np.name, 'add', true, '');
@@ -338,8 +357,12 @@
     if ((m = /^\/api\/plugs\/(\d+)$/.exec(path))) {
       var id = +m[1], idx = state.plugs.findIndex(function (p) { return p.id === id; });
       if (idx < 0) throw httpError(404, 'розетку не знайдено');
-      if (method === 'PUT') { buildPlug(body, state.plugs[idx]); applyInputs(); return publicPlug(state.plugs[idx]); }
+      if (method === 'PUT') { checkDup(body, id); buildPlug(body, state.plugs[idx]); applyInputs(); return publicPlug(state.plugs[idx]); }
       if (method === 'DELETE') { var gone = state.plugs.splice(idx, 1)[0]; addLog('api', gone.name, 'delete', true, ''); return { ok: true }; }
+    }
+    if ((m = /^\/api\/plugs\/(\d+)\/check$/.exec(path)) && method === 'POST') {
+      if (!state.plugs.some(function (p) { return p.id === +m[1]; })) throw httpError(404, 'plug not found');
+      return { ok: true };   /* демо: розетки не «ремонтуються» самі */
     }
     if ((m = /^\/api\/plugs\/(\d+)\/action$/.exec(path)) && method === 'POST') {
       var pl = state.plugs.find(function (p) { return p.id === +m[1]; });
@@ -389,6 +412,13 @@
       return { ok: true };
     }
     if (path === '/api/wifi/ap' && method === 'POST') {
+      if (body.mode) {
+        if (body.mode !== 'always' && body.mode !== 'auto') throw httpError(400, 'mode: always | auto');
+        state.wifi.ap_mode = body.mode;
+        state.wifi.ap_on = body.mode === 'always' || !state.wifi.connected;   /* демо: «Авто» вимикає AP одразу, а не за 5 хв */
+        addLog('api', '', 'ap_mode', true, body.mode);
+        if (!('password' in body)) return { ok: true };
+      }
       var apPass = String(body.password || '');
       if (apPass.length < 8 || apPass.length > 63) throw httpError(400, 'пароль точки доступу: 8–63 символи (лише ASCII)');
       state.wifi.ap_password = apPass;
@@ -581,7 +611,7 @@
   dbg = initialDbg();
   scan = { running: false, startedAt: 0 };
   wifiScan = { startedAt: 0 };
-  nextId = 6;
+  nextId = 7;
 
   window.fetch = fakeFetch;
   window.XMLHttpRequest = FakeXHR;
